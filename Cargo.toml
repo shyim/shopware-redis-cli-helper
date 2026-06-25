@@ -1,0 +1,31 @@
+[package]
+name = "shopware-redis-cli-helper"
+version = "0.1.0"
+edition = "2021"
+description = "Inspect and clean up a Shopware/Symfony Redis cache: namespace/key insights and orphaned-tag cleanup"
+license = "MIT"
+
+[[bin]]
+name = "shopware-redis-cli-helper"
+path = "src/main.rs"
+
+[dependencies]
+redis = { version = "0.27", features = ["tokio-comp", "aio", "connection-manager", "script"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync"] }
+clap = { version = "4", features = ["derive", "env"] }
+anyhow = "1"
+indicatif = "0.17"
+comfy-table = "7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+humansize = "2"
+ratatui = "0.30"
+crossterm = "0.29"
+futures = "0.3"
+flate2 = "1"
+zstd = "0.13"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[profile.release]
+lto = true
+codegen-units = 1

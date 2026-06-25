@@ -1,0 +1,43 @@
+version: 2
+
+project_name: shopware-redis-cli-helper
+
+builds:
+  - id: shopware-redis-cli-helper
+    builder: rust
+    binary: shopware-redis-cli-helper
+    tool: cargo
+    command: zigbuild
+    flags:
+      - --release
+      - --locked
+    targets:
+      - x86_64-apple-darwin
+      - aarch64-apple-darwin
+      - x86_64-unknown-linux-gnu
+      - aarch64-unknown-linux-gnu
+
+archives:
+  - id: shopware-redis-cli-helper
+    ids:
+      - shopware-redis-cli-helper
+    formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
