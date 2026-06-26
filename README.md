@@ -15,7 +15,9 @@ all over non-blocking `SCAN`, safe to run against production.
 - **Namespace & type insights** — group millions of keys into a handful of
   meaningful buckets, with key counts, memory, data type, and TTL breakdowns.
 - **Interactive TUI** — a live, navigable view that fills in as the scan runs,
-  with drill-down from namespace → type → key → value.
+  with drill-down from namespace → type → key → value, a **Persistent** tab
+  showing how much memory no-TTL keys hold (unevictable cache), and a live
+  server-health strip (memory fullness, evictions, fragmentation) in the header.
 - **Value inspector** — type-aware rendering with automatic **gzip / zlib / zstd**
   decompression (including streams embedded in Symfony cache wrappers), a
   hex/text toggle, and absolute TTL expiry timestamps.
@@ -139,6 +141,12 @@ shopware-redis-cli-helper insights        # opens the TUI
 shopware-redis-cli-helper insights tui     # explicit
 ```
 
+**Server health strip.** The header carries a live, polled summary of the Redis
+server itself — **memory fullness** (`used_memory` vs `maxmemory`, colour-coded
+by pressure, or absolute usage when no limit is set), total **keys** in the DB,
+**evicted keys** (cache thrashing against the ceiling), memory **fragmentation**,
+and the Redis **version**. It refreshes every couple of seconds while you browse.
+
 **Scan depth.** On startup the TUI presents an in-app scan-depth picker:
 
 | Mode         | Collects                                              | Cost                                   |
@@ -150,16 +158,17 @@ The scan starts only after you choose. Passing `--mode basic\|advanced`, or any
 stat flag (`--memory`, `--full`, `--biggest N`, …), skips the picker and honors
 exactly what you requested.
 
-**Navigation.**
+**Navigation.** A tab bar under the header switches between the **Browse** and
+**Biggest keys** views with `Tab` / `Shift-Tab`.
 
 | Key                | Action                                                  |
 |--------------------|---------------------------------------------------------|
+| `Tab` / `Shift-Tab` | Switch tabs: **Browse** ⇄ **Biggest keys**             |
 | `↑` / `↓`, `j` / `k` | Move within the focused pane or list                  |
-| `→` / `l`, `Tab`   | Focus the **Types** pane (`Tab` cycles panes)           |
+| `→` / `l`          | Focus the **Types** pane (`←` / `h` to go back)         |
 | `Enter`            | Drill in: Namespaces → Types → key list → value         |
 | `←` / `h`, `Esc`   | Step back out                                           |
 | `x`                | In a value: toggle **hex** ⇄ **text**                   |
-| `b`                | Switch **Browse** ⇄ **Biggest keys**                    |
 | `s`                | Cycle sort: count → total memory → average memory       |
 | `/`                | Filter namespaces / types by substring                  |
 | `q` / `Ctrl-C`     | Quit                                                    |
@@ -180,6 +189,15 @@ exactly what you requested.
 
 Symfony tag-index sets (stored with `\x01tags\x01` control bytes) are shown as
 **🏷 `<name>` (tag set)**; filter for them by typing `tag`.
+
+**Tabs.** In advanced mode the tab bar offers three views:
+
+- **Browse** — namespaces and their key types (described above).
+- **Biggest keys** — the largest keys by memory.
+- **Persistent** — keys with **no TTL**, grouped by type, with how much memory
+  they hold. This is the cache that expiry will never reclaim; the banner shows
+  the total and what share of measured memory is unevictable. (Advanced only —
+  it needs both memory and TTL data.)
 
 #### Reports (`insights report`)
 
@@ -374,6 +392,7 @@ Source layout:
 | `src/report.rs`   | Terminal-table and Markdown rendering                       |
 | `src/tui.rs`      | Interactive ratatui UI: scan, navigation, drill-down        |
 | `src/inspect.rs`  | Async fetcher: list a type's keys, read a value             |
+| `src/serverinfo.rs` | Background `INFO`/`DBSIZE` poller for the header health strip |
 | `src/value.rs`    | Compression detection and decoding for display              |
 
 ## License

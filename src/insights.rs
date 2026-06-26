@@ -306,7 +306,11 @@ async fn run_tui(args: ScanArgs, client: redis::Client, connect_timeout: u64) ->
     // Drill-down fetcher: a separate task with its own (lazily-created)
     // connection, so the UI can list a type's keys and inspect values on demand.
     let inbox: crate::inspect::InboxHandle = Arc::new(Mutex::new(crate::inspect::Inbox::default()));
-    let fetch_tx = crate::inspect::spawn(fetch_client, connect_timeout, inbox.clone());
+    let fetch_tx = crate::inspect::spawn(fetch_client.clone(), connect_timeout, inbox.clone());
+
+    // Server-stats poller: refreshes memory/eviction/… for the header live.
+    let info: crate::serverinfo::InfoHandle = Arc::new(Mutex::new(None));
+    let info_task = crate::serverinfo::spawn(fetch_client, connect_timeout, info.clone());
 
     // Build the UI. With a preset depth, fire it now so the scan starts at once
     // and open straight on the running view. Otherwise hand the sender to the
@@ -326,11 +330,13 @@ async fn run_tui(args: ScanArgs, client: redis::Client, connect_timeout: u64) ->
             None => tui::App::new(ui_shared),
         };
         app.attach_inspector(fetch_tx, inbox);
+        app.attach_server_info(info);
         tui::run(&mut app)
     });
 
     let ui_result = ui.await.context("UI thread panicked")?;
     scan_task.abort();
+    info_task.abort();
     ui_result
 }
 

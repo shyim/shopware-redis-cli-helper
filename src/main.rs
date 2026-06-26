@@ -5,6 +5,7 @@ mod insights;
 mod inspect;
 mod report;
 mod scanner;
+mod serverinfo;
 mod stats;
 mod tui;
 mod value;

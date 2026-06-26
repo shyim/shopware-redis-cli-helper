@@ -19,6 +19,9 @@ pub struct TypeStat {
     pub persistent: u64,
     /// Keys with an expiry set.
     pub expiring: u64,
+    /// Memory held by persistent (no-TTL) keys — i.e. space that won't be freed
+    /// by expiry. Only populated when both memory and TTL are collected.
+    pub persistent_bytes: u64,
 }
 
 impl TypeStat {
@@ -107,6 +110,10 @@ impl Stats {
             if let Some(ttl) = obs.ttl {
                 if ttl == -1 {
                     stat.persistent += 1;
+                    // Track the memory of no-TTL keys: space expiry won't free.
+                    if let Some(bytes) = obs.bytes {
+                        stat.persistent_bytes += bytes;
+                    }
                 } else if ttl >= 0 {
                     stat.expiring += 1;
                 }
@@ -205,6 +212,8 @@ mod tests {
         assert_eq!(stat.avg_bytes(), 200);
         assert_eq!(stat.persistent, 1);
         assert_eq!(stat.expiring, 1);
+        // Only the no-TTL key (100 bytes) counts toward unevictable memory.
+        assert_eq!(stat.persistent_bytes, 100);
         assert_eq!(stat.data_types["string"], 2);
         assert_eq!(s.namespace_count("ns1"), 2);
     }

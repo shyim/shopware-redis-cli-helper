@@ -20,7 +20,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, Borders, Cell, Gauge, List, ListItem, ListState, Paragraph, Row, Table, TableState,
+    Block, Borders, Cell, Gauge, List, ListItem, ListState, Paragraph, Row, Table, TableState, Tabs,
 };
 use ratatui::{Frame, Terminal};
 use std::io::Stdout;
@@ -80,13 +80,52 @@ enum Screen {
     Value,
 }
 
-/// Top-level focus: which panel/view is active.
+/// Top-level focus: which panel/view is active. These are the tabs in the bar.
 #[derive(Clone, Copy, PartialEq)]
 enum View {
     /// Namespace list (left) + its type breakdown (right).
     Browse,
     /// Full-screen biggest-keys table.
     Biggest,
+    /// Persistent (no-TTL) keys: how much memory expiry can't free.
+    Persistent,
+}
+
+impl View {
+    fn title(self) -> &'static str {
+        match self {
+            View::Browse => "Browse",
+            View::Biggest => "Biggest keys",
+            View::Persistent => "Persistent",
+        }
+    }
+
+    /// The tabs available in bar order. The advanced-only views (Biggest,
+    /// Persistent) need memory/TTL data, so they're hidden in basic mode.
+    fn available(advanced: bool) -> Vec<View> {
+        if advanced {
+            vec![View::Browse, View::Biggest, View::Persistent]
+        } else {
+            vec![View::Browse]
+        }
+    }
+
+    /// Index of this view within the available tabs (0 if somehow absent).
+    fn index(self, advanced: bool) -> usize {
+        View::available(advanced)
+            .iter()
+            .position(|&v| v == self)
+            .unwrap_or(0)
+    }
+
+    /// Next/previous tab among the available ones, wrapping.
+    fn cycle(self, advanced: bool, forward: bool) -> View {
+        let tabs = View::available(advanced);
+        let i = self.index(advanced) as isize;
+        let delta = if forward { 1 } else { -1 };
+        let next = (i + delta).rem_euclid(tabs.len() as isize) as usize;
+        tabs[next]
+    }
 }
 
 /// Within the Browse view, which of the two panes has keyboard focus.
@@ -113,6 +152,8 @@ pub struct App {
     type_state: TableState,
     /// Selection into the biggest-keys table.
     big_state: TableState,
+    /// Selection into the persistent-keys table.
+    persist_state: TableState,
     /// Live substring filter (applies to namespace + type names).
     filter: String,
     /// True while the filter input box is capturing keystrokes.
@@ -138,6 +179,9 @@ pub struct App {
     value_hex: bool,
     /// True while a fetch is in flight.
     loading: bool,
+
+    /// Live server stats (memory/evictions/…) polled in the background.
+    info: Option<crate::serverinfo::InfoHandle>,
 
     should_quit: bool,
 }
@@ -179,6 +223,7 @@ impl App {
             ns_state,
             type_state: TableState::default(),
             big_state: TableState::default(),
+            persist_state: TableState::default(),
             filter: String::new(),
             editing_filter: false,
             advanced,
@@ -191,6 +236,7 @@ impl App {
             value_scroll: 0,
             value_hex: false,
             loading: false,
+            info: None,
             should_quit: false,
         }
     }
@@ -204,6 +250,11 @@ impl App {
     ) {
         self.fetch_tx = Some(fetch_tx);
         self.inbox = Some(inbox);
+    }
+
+    /// Give the app the handle the background poller writes server stats into.
+    pub fn attach_server_info(&mut self, info: crate::serverinfo::InfoHandle) {
+        self.info = Some(info);
     }
 
     /// Consume any fresh result the fetcher published and move to the matching
@@ -425,34 +476,22 @@ fn handle_key(app: &mut App, code: KeyCode, mods: KeyModifiers, snapshot: &Stats
             app.editing_filter = true;
         }
         KeyCode::Char('s') => app.sort = app.sort.next(),
-        // 'b' is the dedicated Browse <-> Biggest view switch.
-        KeyCode::Char('b') => {
-            app.view = match app.view {
-                View::Browse => View::Biggest,
-                View::Biggest => View::Browse,
-            };
-        }
-        // In Browse, move focus rightward into the Types pane (and Tab cycles
-        // between the two panes). In Biggest there's only one pane.
+        // Tab / Shift-Tab switch the top-level tabs. `b` is a forward alias.
+        KeyCode::Tab => app.view = app.view.cycle(app.advanced, true),
+        KeyCode::BackTab => app.view = app.view.cycle(app.advanced, false),
+        KeyCode::Char('b') => app.view = app.view.cycle(app.advanced, true),
+        // Within Browse, move focus between the Namespaces and Types panes.
         KeyCode::Right | KeyCode::Char('l') => focus_pane(app, snapshot, Pane::Types),
         KeyCode::Left | KeyCode::Char('h') | KeyCode::Esc => {
             focus_pane(app, snapshot, Pane::Namespaces)
-        }
-        KeyCode::Tab => {
-            if app.view == View::Browse {
-                let target = match app.pane {
-                    Pane::Namespaces => Pane::Types,
-                    Pane::Types => Pane::Namespaces,
-                };
-                focus_pane(app, snapshot, target);
-            }
         }
         // Enter drills in: from Namespaces into the Types pane, and from a
         // focused type into its sample key list.
         KeyCode::Enter => match app.view {
             View::Browse if app.pane == Pane::Namespaces => focus_pane(app, snapshot, Pane::Types),
             View::Browse => app.drill_into_type(snapshot),
-            View::Biggest => {} // biggest view: nothing to drill into here
+            // Biggest/Persistent are read-only tables — nothing to drill into.
+            View::Biggest | View::Persistent => {}
         },
         KeyCode::Down | KeyCode::Char('j') => move_selection(app, snapshot, 1),
         KeyCode::Up | KeyCode::Char('k') => move_selection(app, snapshot, -1),
@@ -544,7 +583,45 @@ fn move_selection(app: &mut App, snapshot: &Stats, delta: isize) {
             let next = step(app.big_state.selected().unwrap_or(0), len);
             app.big_state.select(Some(next));
         }
+        View::Persistent => {
+            let len = persistent_rows(snapshot).len();
+            if len == 0 {
+                return;
+            }
+            let next = step(app.persist_state.selected().unwrap_or(0), len);
+            app.persist_state.select(Some(next));
+        }
     }
+}
+
+/// A persistent (no-TTL) row: which type holds unevictable keys, and how much.
+struct PersistRow {
+    namespace: String,
+    key_type: String,
+    keys: u64,
+    bytes: u64,
+}
+
+/// Every (namespace, type) bucket that has persistent keys, sorted by the memory
+/// it holds (descending) — the space expiry can't free.
+fn persistent_rows(stats: &Stats) -> Vec<PersistRow> {
+    let mut rows: Vec<PersistRow> = stats
+        .namespaces
+        .iter()
+        .flat_map(|(ns, types)| {
+            types
+                .iter()
+                .filter(|(_, s)| s.persistent > 0)
+                .map(move |(t, s)| PersistRow {
+                    namespace: ns.clone(),
+                    key_type: t.clone(),
+                    keys: s.persistent,
+                    bytes: s.persistent_bytes,
+                })
+        })
+        .collect();
+    rows.sort_by_key(|r| std::cmp::Reverse((r.bytes, r.keys)));
+    rows
 }
 
 // ---------------------------------------------------------------------------
@@ -652,7 +729,7 @@ fn draw(f: &mut Frame, app: &mut App, stats: &Stats, done: bool, error: Option<&
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // header / progress
+            Constraint::Length(4), // header: scan gauge (3) + server stats (1)
             Constraint::Min(0),    // body
             Constraint::Length(1), // footer / help
         ])
@@ -692,12 +769,47 @@ fn draw(f: &mut Frame, app: &mut App, stats: &Stats, done: bool, error: Option<&
         _ => {}
     }
 
-    draw_header(f, chunks[0], stats, done, error.is_some(), app.advanced);
+    // Split the header band into the scan gauge (3 rows) and a server-stats
+    // line (1 row).
+    let head = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Length(1)])
+        .split(chunks[0]);
+    draw_header(f, head[0], stats, done, error.is_some(), app.advanced);
+    draw_server_stats(f, head[1], app);
+
+    // Body = a one-row tab bar + the active view below it.
+    let body = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(chunks[1]);
+    draw_tab_bar(f, body[0], app.view, app.advanced);
     match app.view {
-        View::Browse => draw_browse(f, chunks[1], app, stats),
-        View::Biggest => draw_biggest(f, chunks[1], app, stats),
+        View::Browse => draw_browse(f, body[1], app, stats),
+        View::Biggest => draw_biggest(f, body[1], app, stats),
+        View::Persistent => draw_persistent(f, body[1], app, stats),
     }
     draw_footer(f, chunks[2], app, error);
+}
+
+/// The top-level tab strip.
+fn draw_tab_bar(f: &mut Frame, area: Rect, view: View, advanced: bool) {
+    let titles: Vec<&str> = View::available(advanced)
+        .iter()
+        .map(|v| v.title())
+        .collect();
+    let tabs = Tabs::new(titles)
+        .select(view.index(advanced))
+        .style(Style::default().fg(Color::Gray))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+        .divider("│")
+        .padding(" ", " ");
+    f.render_widget(tabs, area);
 }
 
 fn draw_drill_header(f: &mut Frame, area: Rect, what: &str) {
@@ -1004,6 +1116,96 @@ fn draw_header(f: &mut Frame, area: Rect, stats: &Stats, done: bool, failed: boo
     f.render_widget(gauge, area);
 }
 
+/// The one-line server-stats strip below the scan gauge: how full Redis is,
+/// plus eviction pressure, DB size, fragmentation, and version. Polled live.
+fn draw_server_stats(f: &mut Frame, area: Rect, app: &App) {
+    let Some(info) = app.info.as_ref().and_then(|h| h.lock().unwrap().clone()) else {
+        let p = Paragraph::new(Line::from(Span::styled(
+            " redis: connecting…",
+            Style::default().fg(Color::DarkGray),
+        )));
+        f.render_widget(p, area);
+        return;
+    };
+
+    let mut spans: Vec<Span> = vec![Span::styled(
+        " redis ",
+        Style::default().fg(Color::DarkGray),
+    )];
+
+    // Memory: a fullness % when a ceiling is set, else absolute usage.
+    match (info.memory_fullness(), info.used_memory, info.maxmemory) {
+        (Some(frac), Some(used), Some(max)) => {
+            // Colour by pressure: green < 75%, yellow < 90%, red beyond.
+            let color = if frac >= 0.90 {
+                Color::Red
+            } else if frac >= 0.75 {
+                Color::Yellow
+            } else {
+                Color::Green
+            };
+            spans.push(Span::styled(
+                format!("mem {:.0}% ", frac * 100.0),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::styled(
+                format!(
+                    "({}/{})  ",
+                    format_size(used, DECIMAL),
+                    format_size(max, DECIMAL)
+                ),
+                Style::default().fg(Color::Gray),
+            ));
+        }
+        (None, Some(used), _) => {
+            spans.push(Span::styled(
+                format!("mem {}  ", format_size(used, DECIMAL)),
+                Style::default().fg(Color::Magenta),
+            ));
+            spans.push(Span::styled(
+                "(no limit)  ",
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        _ => {}
+    }
+
+    if let Some(keys) = info.db_keys {
+        spans.push(Span::styled(
+            format!("keys {keys}  "),
+            Style::default().fg(Color::Cyan),
+        ));
+    }
+    if let Some(ev) = info.evicted_keys {
+        // Any eviction at all is worth flagging (cache thrashing the ceiling).
+        let color = if ev > 0 { Color::Yellow } else { Color::Gray };
+        spans.push(Span::styled(
+            format!("evicted {ev}  "),
+            Style::default().fg(color),
+        ));
+    }
+    if let Some(frag) = info.mem_fragmentation_ratio {
+        // >1.5 means RSS is much larger than logical use — wasted memory.
+        let color = if frag >= 1.5 {
+            Color::Yellow
+        } else {
+            Color::Gray
+        };
+        spans.push(Span::styled(
+            format!("frag {frag:.2}  "),
+            Style::default().fg(color),
+        ));
+    }
+    if let Some(v) = &info.redis_version {
+        spans.push(Span::styled(
+            format!("v{v}"),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
 /// Border style for a pane: bright cyan when focused, dim gray otherwise.
 fn pane_border(focused: bool) -> Style {
     if focused {
@@ -1026,39 +1228,56 @@ fn draw_browse(f: &mut Frame, area: Rect, app: &mut App, stats: &Stats) {
 
     let ns_rows = filtered_namespaces(stats, &app.filter, app.sort);
 
-    // Keep selection in range as the filtered list changes size.
-    if let Some(sel) = app.ns_state.selected() {
-        if sel >= ns_rows.len() {
-            app.ns_state
-                .select(if ns_rows.is_empty() { None } else { Some(0) });
-        }
+    // Keep a valid selection: clamp into range, and auto-select the first row
+    // once namespaces appear (the list starts empty during the live scan, so the
+    // cursor would otherwise stay unset until the user pressed a key).
+    match app.ns_state.selected() {
+        _ if ns_rows.is_empty() => app.ns_state.select(None),
+        None => app.ns_state.select(Some(0)),
+        Some(sel) if sel >= ns_rows.len() => app.ns_state.select(Some(0)),
+        _ => {}
     }
 
+    let selected = app.ns_state.selected();
+    // Memory is only collected in advanced mode; hide the always-zero column in
+    // basic mode rather than showing a misleading "0 B".
+    let show_mem = app.advanced;
     let items: Vec<ListItem> = ns_rows
         .iter()
-        .map(|r| {
-            ListItem::new(Line::from(vec![
+        .enumerate()
+        .map(|(i, r)| {
+            // On the selected row, render everything black so it reads cleanly on
+            // the bright (cyan) highlight bar. Off-row, colour the columns for
+            // scannability.
+            let is_sel = ns_focused && selected == Some(i);
+            let (name_c, keys_c, mem_c) = if is_sel {
+                (Color::Black, Color::Black, Color::Black)
+            } else {
+                (Color::White, Color::Yellow, Color::Magenta)
+            };
+            let mut spans = vec![
                 Span::styled(
                     format!("{:<14}", truncate(&r.name, 14)),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(name_c),
                 ),
-                Span::styled(
-                    format!(" {:>9}", r.keys),
-                    Style::default().fg(Color::Yellow),
-                ),
-                Span::styled(
+                Span::styled(format!(" {:>10}", r.keys), Style::default().fg(keys_c)),
+            ];
+            if show_mem {
+                spans.push(Span::styled(
                     format!("  {:>9}", format_size(r.bytes, DECIMAL)),
-                    Style::default().fg(Color::Magenta),
-                ),
-            ]))
+                    Style::default().fg(mem_c),
+                ));
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
 
-    // Highlight the selected namespace brightly only while this pane is focused;
-    // keep a subtler marker when focus has moved to the Types pane.
+    // Highlight the selected namespace with a high-contrast cyan bar while this
+    // pane is focused; keep a subtler marker when focus has moved to Types.
     let ns_highlight = if ns_focused {
         Style::default()
-            .bg(Color::DarkGray)
+            .bg(Color::Cyan)
+            .fg(Color::Black)
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().add_modifier(Modifier::DIM)
@@ -1081,16 +1300,15 @@ fn draw_browse(f: &mut Frame, area: Rect, app: &mut App, stats: &Stats) {
         .and_then(|i| ns_rows.get(i))
         .map(|r| r.name.clone());
 
-    let header = Row::new(vec![
-        Cell::from("Type"),
-        Cell::from("Keys"),
-        Cell::from("%"),
-        Cell::from("Total"),
-        Cell::from("Avg"),
-        Cell::from("Types"),
-        Cell::from("P/E"),
-    ])
-    .style(Style::default().add_modifier(Modifier::BOLD));
+    // In basic mode only counts are known, so show just Type/Keys/%. Advanced
+    // mode adds the memory, data-type, and persist/expire columns.
+    let header_cells = if show_mem {
+        vec!["Type", "Keys", "%", "Total", "Avg", "Types", "P/E"]
+    } else {
+        vec!["Type", "Keys", "%"]
+    };
+    let header = Row::new(header_cells.into_iter().map(Cell::from).collect::<Vec<_>>())
+        .style(Style::default().add_modifier(Modifier::BOLD));
 
     let (title, trows): (String, Vec<Row>) = match &selected_ns {
         Some(ns) => {
@@ -1099,15 +1317,18 @@ fn draw_browse(f: &mut Frame, area: Rect, app: &mut App, stats: &Stats) {
             let rows = type_rows
                 .iter()
                 .map(|t| {
-                    Row::new(vec![
+                    let mut cells = vec![
                         Cell::from(truncate(&display_type(&t.name), 38)),
                         Cell::from(t.keys.to_string()),
                         Cell::from(pct(t.keys, total)),
-                        Cell::from(format_size(t.total_bytes, DECIMAL)),
-                        Cell::from(format_size(t.avg_bytes, DECIMAL)),
-                        Cell::from(truncate(&t.data_types, 16)),
-                        Cell::from(format!("{}/{}", t.persistent, t.expiring)),
-                    ])
+                    ];
+                    if show_mem {
+                        cells.push(Cell::from(format_size(t.total_bytes, DECIMAL)));
+                        cells.push(Cell::from(format_size(t.avg_bytes, DECIMAL)));
+                        cells.push(Cell::from(truncate(&t.data_types, 16)));
+                        cells.push(Cell::from(format!("{}/{}", t.persistent, t.expiring)));
+                    }
+                    Row::new(cells)
                 })
                 .collect();
             (format!(" {} — {} types ", ns, type_rows.len()), rows)
@@ -1115,15 +1336,23 @@ fn draw_browse(f: &mut Frame, area: Rect, app: &mut App, stats: &Stats) {
         None => (" Types ".to_string(), Vec::new()),
     };
 
-    let widths = [
-        Constraint::Min(20),
-        Constraint::Length(7),
-        Constraint::Length(6),
-        Constraint::Length(9),
-        Constraint::Length(9),
-        Constraint::Length(16),
-        Constraint::Length(7),
-    ];
+    let widths: &[Constraint] = if show_mem {
+        &[
+            Constraint::Min(20),
+            Constraint::Length(7),
+            Constraint::Length(6),
+            Constraint::Length(9),
+            Constraint::Length(9),
+            Constraint::Length(16),
+            Constraint::Length(7),
+        ]
+    } else {
+        &[
+            Constraint::Min(20),
+            Constraint::Length(10),
+            Constraint::Length(7),
+        ]
+    };
     // Only show the row cursor in the Types pane while it has focus.
     // (TableState is Copy, so this is a local copy, not a move out of `app`.)
     let mut type_state = app.type_state;
@@ -1140,7 +1369,8 @@ fn draw_browse(f: &mut Frame, area: Rect, app: &mut App, stats: &Stats) {
         )
         .row_highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(Color::Cyan)
+                .fg(Color::Black)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▶ ");
@@ -1204,9 +1434,119 @@ fn draw_biggest(f: &mut Frame, area: Rect, app: &mut App, stats: &Stats) {
     let table = Table::new(rows, widths)
         .header(header)
         .block(Block::default().borders(Borders::ALL).title(title))
-        .row_highlight_style(Style::default().bg(Color::DarkGray))
+        .row_highlight_style(
+            Style::default()
+                .bg(Color::Cyan)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        )
         .highlight_symbol("▶ ");
     f.render_stateful_widget(table, area, &mut app.big_state);
+}
+
+/// The Persistent tab: how many keys have no TTL and how much memory they hold —
+/// space expiry will never reclaim. A summary banner over a per-type table.
+fn draw_persistent(f: &mut Frame, area: Rect, app: &mut App, stats: &Stats) {
+    let rows_data = persistent_rows(stats);
+
+    // Keep selection valid as data fills in.
+    match app.persist_state.selected() {
+        _ if rows_data.is_empty() => app.persist_state.select(None),
+        None => app.persist_state.select(Some(0)),
+        Some(sel) if sel >= rows_data.len() => app.persist_state.select(Some(0)),
+        _ => {}
+    }
+
+    // Totals: persistent keys/bytes, and total measured bytes for a %.
+    let persist_keys: u64 = rows_data.iter().map(|r| r.keys).sum();
+    let persist_bytes: u64 = rows_data.iter().map(|r| r.bytes).sum();
+    let measured_bytes: u64 = stats
+        .namespaces
+        .values()
+        .flat_map(|t| t.values())
+        .map(|s| s.total_bytes)
+        .sum();
+    let pct_mem = if measured_bytes > 0 {
+        persist_bytes as f64 / measured_bytes as f64 * 100.0
+    } else {
+        0.0
+    };
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(0)])
+        .split(area);
+
+    // Banner.
+    let banner = Line::from(vec![
+        Span::styled(
+            format!("{persist_keys} persistent keys"),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  holding  "),
+        Span::styled(
+            format_size(persist_bytes, DECIMAL),
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  ({pct_mem:.1}% of measured memory) — won't be freed by expiry"),
+            Style::default().fg(Color::Gray),
+        ),
+    ]);
+    f.render_widget(
+        Paragraph::new(banner).block(Block::default().borders(Borders::BOTTOM)),
+        layout[0],
+    );
+
+    // Table.
+    let header = Row::new(
+        ["Namespace", "Type", "Keys", "Memory"]
+            .into_iter()
+            .map(Cell::from)
+            .collect::<Vec<_>>(),
+    )
+    .style(Style::default().add_modifier(Modifier::BOLD));
+
+    let rows: Vec<Row> = rows_data
+        .iter()
+        .map(|r| {
+            Row::new(vec![
+                Cell::from(truncate(&r.namespace, 16)),
+                Cell::from(truncate(&display_type(&r.key_type), 40)),
+                Cell::from(r.keys.to_string()),
+                Cell::from(format_size(r.bytes, DECIMAL)),
+            ])
+        })
+        .collect();
+
+    let widths = [
+        Constraint::Length(16),
+        Constraint::Min(20),
+        Constraint::Length(10),
+        Constraint::Length(11),
+    ];
+
+    let title = if rows_data.is_empty() {
+        " Persistent keys — none found (every key has a TTL) ".to_string()
+    } else {
+        format!(" Persistent keys by type ({}) ", rows_data.len())
+    };
+
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .row_highlight_style(
+            Style::default()
+                .bg(Color::Cyan)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▶ ");
+    f.render_stateful_widget(table, layout[1], &mut app.persist_state);
 }
 
 fn draw_footer(f: &mut Frame, area: Rect, app: &App, error: Option<&str>) {
@@ -1245,20 +1585,21 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App, error: Option<&str>) {
         // In the Types pane (with a live connection), Enter drills into a type's
         // keys; otherwise Enter just steps Namespaces → Types.
         View::Browse if app.pane == Pane::Types && can_drill => format!(
-            " ↑↓ move  Enter keys  ←/Esc back  s: sort [{}]  /: filter  b: biggest  q: quit{} ",
+            " ↑↓ move  Enter keys  ←/Esc back  Tab: view  s: sort [{}]  /: filter  q: quit{} ",
             app.sort.label(),
             filt,
         ),
         View::Browse => format!(
-            " ↑↓ move  →/Tab/Enter types  ←/Esc back  s: sort [{}]  /: filter  b: biggest  q: quit{} ",
+            " ↑↓ move  →/Enter types  Tab: view  s: sort [{}]  /: filter  q: quit{} ",
             app.sort.label(),
             filt,
         ),
         View::Biggest => format!(
-            " ↑↓ move  s: sort [{}]  /: filter  b: browse  q: quit{} ",
+            " ↑↓ move  Tab: view  s: sort [{}]  /: filter  q: quit{} ",
             app.sort.label(),
             filt,
         ),
+        View::Persistent => format!(" ↑↓ move  Tab: view  /: filter  q: quit{filt} "),
     };
     let p = Paragraph::new(Line::from(vec![Span::styled(
         hint,
@@ -1344,6 +1685,75 @@ mod tests {
     }
 
     #[test]
+    fn selected_namespace_row_is_readable_not_magenta() {
+        // Regression: the selected row used to keep its per-column magenta/yellow
+        // foreground over the dark-gray highlight, making the memory column
+        // unreadable. The highlight must own the whole row (white on dark gray).
+        let s = sample();
+        let mut app = app_with(&s); // Namespaces pane focused, row 0 selected
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw(f, &mut app, &s, true, None))
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+
+        // Find the highlighted row (the cyan selection bar in the left pane) and
+        // check its text is black (readable), never the magenta column colour.
+        let mut checked = false;
+        for y in 0..buf.area.height {
+            // The left namespace pane is the first ~46 columns.
+            let row_is_highlighted =
+                (0..46).any(|x| buf.cell((x, y)).map(|c| c.style().bg) == Some(Some(Color::Cyan)));
+            if !row_is_highlighted {
+                continue;
+            }
+            for x in 0..46 {
+                if let Some(cell) = buf.cell((x, y)) {
+                    assert_ne!(
+                        cell.style().fg,
+                        Some(Color::Magenta),
+                        "selected row still has magenta text (unreadable)"
+                    );
+                }
+            }
+            checked = true;
+        }
+        assert!(checked, "no highlighted namespace row found");
+    }
+
+    #[test]
+    fn header_shows_server_stats_when_available() {
+        use crate::serverinfo::ServerInfo;
+        let s = sample();
+        let mut app = app_with(&s);
+        let info = ServerInfo {
+            redis_version: Some("7.2.4".into()),
+            used_memory: Some(75_000_000),
+            maxmemory: Some(100_000_000),
+            evicted_keys: Some(42),
+            mem_fragmentation_ratio: Some(1.80),
+            db_keys: Some(1234),
+            ..Default::default()
+        };
+        app.attach_server_info(Arc::new(Mutex::new(Some(info))));
+        let out = render_app(&mut app, &s);
+        assert!(out.contains("mem 75%"), "fullness missing: {out}");
+        assert!(out.contains("keys 1234"), "db keys missing");
+        assert!(out.contains("evicted 42"), "evictions missing");
+        assert!(out.contains("frag 1.80"), "fragmentation missing");
+        assert!(out.contains("v7.2.4"), "version missing");
+    }
+
+    #[test]
+    fn header_shows_connecting_until_first_poll() {
+        let s = sample();
+        let mut app = app_with(&s);
+        app.attach_server_info(Arc::new(Mutex::new(None)));
+        assert!(render_app(&mut app, &s).contains("connecting"));
+    }
+
+    #[test]
     fn biggest_empty_hint_differs_by_mode() {
         // No biggest data + basic mode -> hint nudges toward advanced.
         let s = Stats::default();
@@ -1359,13 +1769,66 @@ mod tests {
     #[test]
     fn browse_view_renders_memory_types_and_ttl_columns() {
         let s = sample();
-        let out = render_to_string(&s, View::Browse);
+        // These columns only exist in advanced mode.
+        let out = render_with_mode(&s, View::Browse, true);
         // Namespaces appear.
         assert!(out.contains("alpha"), "namespace missing: {out}");
         // Memory column populated (humansize formats e.g. "6.05 kB" / "200 B").
         assert!(out.contains(" B") || out.contains("kB"), "no memory: {out}");
         // Data-type breakdown rendered for the selected namespace's types.
         assert!(out.contains("string:"), "no data types: {out}");
+    }
+
+    #[test]
+    fn basic_mode_hides_memory_columns() {
+        // In basic mode only counts are known; the namespace list and type table
+        // must not show a misleading "0 B" memory column.
+        let mut s = Stats::with_biggest_cap(0);
+        let obs = KeyObservation {
+            bytes: None,
+            data_type: None,
+            ttl: None,
+        };
+        s.record("ns:product-1", "ns", "product", &obs);
+        let out = render_with_mode(&s, View::Browse, false);
+        assert!(out.contains("product"), "type row missing: {out}");
+        // No memory column: an unmeasured byte total would render as "0 B".
+        // (Check the size value, not a bare " B", so the "Biggest keys" tab
+        // label doesn't trigger a false positive.)
+        assert!(
+            !out.contains("0 B"),
+            "basic mode shows a memory column: {out}"
+        );
+        assert!(
+            !out.contains("kB"),
+            "basic mode shows a memory column: {out}"
+        );
+    }
+
+    #[test]
+    fn first_namespace_auto_selected_once_scan_populates() {
+        // The list starts empty during the live scan; the cursor must land on the
+        // first namespace as soon as one appears (not stay unset).
+        let empty = Stats::default();
+        let mut app = app_with(&empty);
+        // First frame: nothing scanned yet -> no selection.
+        let _ = render_app(&mut app, &empty);
+        assert_eq!(app.ns_state.selected(), None, "empty list -> no selection");
+
+        // Next frame: a namespace has appeared -> auto-select row 0.
+        let obs = KeyObservation {
+            bytes: None,
+            data_type: None,
+            ttl: None,
+        };
+        let mut s = Stats::default();
+        s.record("alpha:product-1", "alpha", "product", &obs);
+        let _ = render_app(&mut app, &s);
+        assert_eq!(
+            app.ns_state.selected(),
+            Some(0),
+            "first namespace should be auto-selected"
+        );
     }
 
     #[test]
@@ -1510,6 +1973,15 @@ mod tests {
         })))
     }
 
+    /// App in advanced mode, where all tabs (Browse/Biggest/Persistent) exist.
+    fn app_with_advanced(stats: &Stats) -> App {
+        App::new(Arc::new(Mutex::new(Shared {
+            stats: stats.clone(),
+            advanced: true,
+            ..Default::default()
+        })))
+    }
+
     fn press(app: &mut App, code: KeyCode, snapshot: &Stats) {
         handle_key(app, code, KeyModifiers::NONE, snapshot);
     }
@@ -1590,13 +2062,97 @@ mod tests {
     }
 
     #[test]
-    fn tab_cycles_between_panes_in_browse() {
+    fn tab_bar_shows_all_tabs_in_advanced() {
+        let s = sample();
+        let mut app = app_with_advanced(&s);
+        let out = render_app(&mut app, &s);
+        assert!(out.contains("Browse"), "Browse tab missing: {out}");
+        assert!(out.contains("Biggest keys"), "Biggest tab missing");
+        assert!(out.contains("Persistent"), "Persistent tab missing");
+    }
+
+    #[test]
+    fn basic_mode_shows_only_browse_tab() {
+        let s = sample();
+        let mut app = app_with(&s); // basic
+        let out = render_app(&mut app, &s);
+        assert!(out.contains("Browse"));
+        assert!(
+            !out.contains("Biggest keys"),
+            "advanced tabs leaked into basic"
+        );
+        assert!(
+            !out.contains("Persistent"),
+            "advanced tabs leaked into basic"
+        );
+    }
+
+    #[test]
+    fn tab_cycles_through_all_views_in_advanced() {
+        let s = sample();
+        let mut app = app_with_advanced(&s);
+        assert!(app.view == View::Browse);
+        press(&mut app, KeyCode::Tab, &s);
+        assert!(app.view == View::Biggest, "Tab -> Biggest");
+        press(&mut app, KeyCode::Tab, &s);
+        assert!(app.view == View::Persistent, "Tab -> Persistent");
+        press(&mut app, KeyCode::Tab, &s);
+        assert!(app.view == View::Browse, "Tab wraps -> Browse");
+        // Shift-Tab goes backwards.
+        press(&mut app, KeyCode::BackTab, &s);
+        assert!(app.view == View::Persistent, "Shift-Tab -> Persistent");
+    }
+
+    #[test]
+    fn tab_is_noop_with_single_tab_in_basic() {
+        let s = sample();
+        let mut app = app_with(&s); // basic: only Browse
+        press(&mut app, KeyCode::Tab, &s);
+        assert!(app.view == View::Browse, "no other tab to switch to");
+    }
+
+    #[test]
+    fn persistent_view_shows_summary_and_per_type_rows() {
+        // Two persistent (no-TTL) keys totalling 1500 bytes, one expiring key.
+        let mut s = Stats::default();
+        let obs = |bytes: u64, ttl: i64| KeyObservation {
+            bytes: Some(bytes),
+            data_type: Some("string".into()),
+            ttl: Some(ttl),
+        };
+        s.record("ns:config-1", "ns", "config", &obs(1000, -1));
+        s.record("ns:config-2", "ns", "config", &obs(500, -1));
+        s.record("ns:page-1", "ns", "page", &obs(9999, 60)); // expiring
+
+        // Aggregation: only the persistent type appears, with its byte total.
+        let rows = persistent_rows(&s);
+        assert_eq!(rows.len(), 1, "only the persistent type");
+        assert_eq!(rows[0].key_type, "config");
+        assert_eq!(rows[0].keys, 2);
+        assert_eq!(rows[0].bytes, 1500);
+
+        let mut app = app_with_advanced(&s);
+        app.view = View::Persistent;
+        let out = render_app(&mut app, &s);
+        assert!(
+            out.contains("2 persistent keys"),
+            "banner count missing: {out}"
+        );
+        assert!(out.contains("config"), "type row missing");
+        // 1500 of 11499 measured bytes ≈ 13%.
+        assert!(out.contains("won't be freed"), "explanation missing");
+    }
+
+    #[test]
+    fn arrows_move_between_panes_in_browse() {
+        // Pane focus now moves with the arrows (Tab is for views).
         let s = sample();
         let mut app = app_with(&s);
-        press(&mut app, KeyCode::Tab, &s);
-        assert!(app.pane == Pane::Types);
-        press(&mut app, KeyCode::Tab, &s);
         assert!(app.pane == Pane::Namespaces);
+        press(&mut app, KeyCode::Right, &s);
+        assert!(app.pane == Pane::Types, "Right -> Types");
+        press(&mut app, KeyCode::Left, &s);
+        assert!(app.pane == Pane::Namespaces, "Left -> Namespaces");
     }
 
     #[test]
