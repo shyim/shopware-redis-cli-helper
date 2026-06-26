@@ -879,6 +879,7 @@ fn draw_key_list(f: &mut Frame, area: Rect, app: &mut App) {
         .highlight_style(
             Style::default()
                 .bg(Color::DarkGray)
+                .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▶ ");
@@ -933,14 +934,11 @@ fn draw_value(f: &mut Frame, area: Rect, app: &App) {
         ));
     }
     if let Some(n) = v.elements {
-        meta2.push(Span::styled(
-            format!("elements {n}   "),
-            Style::default().fg(Color::White),
-        ));
+        meta2.push(Span::styled(format!("elements {n}   "), Style::default()));
     }
     meta2.push(Span::styled(
         format!("ttl {}", crate::inspect::ttl_with_expiry(v.ttl)),
-        Style::default().fg(Color::White),
+        Style::default(),
     ));
 
     let header = Paragraph::new(vec![
@@ -1047,13 +1045,10 @@ fn draw_picker(f: &mut Frame, area: Rect, selected: usize) {
                     Span::styled(marker, Style::default().fg(Color::Cyan)),
                     Span::styled(*title, title_style),
                 ]),
-                Line::from(Span::styled(
-                    format!("    {line1}"),
-                    Style::default().fg(Color::White),
-                )),
+                Line::from(Span::styled(format!("    {line1}"), Style::default())),
                 Line::from(Span::styled(
                     format!("    {line2}"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().add_modifier(Modifier::DIM),
                 )),
                 Line::from(""),
             ])
@@ -1250,16 +1245,20 @@ fn draw_browse(f: &mut Frame, area: Rect, app: &mut App, stats: &Stats) {
             // the bright (cyan) highlight bar. Off-row, colour the columns for
             // scannability.
             let is_sel = ns_focused && selected == Some(i);
-            let (name_c, keys_c, mem_c) = if is_sel {
-                (Color::Black, Color::Black, Color::Black)
+            let name_style = if is_sel {
+                Style::default().fg(Color::Black)
             } else {
-                (Color::White, Color::Yellow, Color::Magenta)
+                // Leave ordinary text on the terminal's default foreground so
+                // the UI remains readable on both dark and light themes.
+                Style::default()
+            };
+            let (keys_c, mem_c) = if is_sel {
+                (Color::Black, Color::Black)
+            } else {
+                (Color::Yellow, Color::Magenta)
             };
             let mut spans = vec![
-                Span::styled(
-                    format!("{:<14}", truncate(&r.name, 14)),
-                    Style::default().fg(name_c),
-                ),
+                Span::styled(format!("{:<14}", truncate(&r.name, 14)), name_style),
                 Span::styled(format!(" {:>10}", r.keys), Style::default().fg(keys_c)),
             ];
             if show_mem {
@@ -1481,9 +1480,7 @@ fn draw_persistent(f: &mut Frame, area: Rect, app: &mut App, stats: &Stats) {
     let banner = Line::from(vec![
         Span::styled(
             format!("{persist_keys} persistent keys"),
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
+            Style::default().add_modifier(Modifier::BOLD),
         ),
         Span::raw("  holding  "),
         Span::styled(
@@ -2015,6 +2012,40 @@ mod tests {
         );
         assert!(out.contains("Basic"), "Basic option missing");
         assert!(out.contains("Advanced"), "Advanced option missing");
+    }
+
+    #[test]
+    fn picker_description_uses_theme_foreground() {
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        let (tx, _rx) = oneshot::channel();
+        let mut app = App::with_picker(shared, tx);
+        let backend = TestBackend::new(120, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw(f, &mut app, &Stats::default(), false, None))
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+
+        // Regression: explicit white text disappears on light terminal themes.
+        // Descriptive picker copy should inherit the terminal foreground.
+        let needle = "Key counts only";
+        let mut checked = false;
+        for y in 0..buf.area.height {
+            let row: String = (0..buf.area.width)
+                .filter_map(|x| buf.cell((x, y)).map(|c| c.symbol().to_string()))
+                .collect();
+            let Some(start) = row.find(needle) else {
+                continue;
+            };
+            for x in start as u16..start as u16 + needle.len() as u16 {
+                let cell = buf.cell((x, y)).unwrap();
+                assert_ne!(cell.style().fg, Some(Color::White));
+                assert!(matches!(cell.style().fg, None | Some(Color::Reset)));
+            }
+            checked = true;
+            break;
+        }
+        assert!(checked, "picker description text not found");
     }
 
     #[test]
