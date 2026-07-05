@@ -81,7 +81,7 @@ func runTUI(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to Redis: %w", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	opts := resolveScanOpts()
 
@@ -110,7 +110,7 @@ func runTUI(cmd *cobra.Command, args []string) error {
 
 func runReport(cmd *cobra.Command, args []string) error {
 	client := MustConnect()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	format, _ := cmd.Flags().GetString("format")
 	output, _ := cmd.Flags().GetString("output")

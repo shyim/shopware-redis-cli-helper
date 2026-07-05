@@ -28,17 +28,17 @@ type KeyList struct {
 
 // KeyValue is the result of a value fetch.
 type KeyValue struct {
-	Key           string     `json:"key"`
-	RedisType     string     `json:"type"`
-	TTL           *int64     `json:"ttl"`
-	SizeBytes     *int64     `json:"size_bytes,omitempty"`
-	Elements      *int64     `json:"elements,omitempty"`
-	Body          string     `json:"body"`
-	Hex           string     `json:"hex,omitempty"`
-	IsBinary      bool       `json:"is_binary"`
-	Encoding      Encoding   `json:"encoding,omitempty"`
-	StreamOffset  *int       `json:"stream_offset,omitempty"`
-	Error         string     `json:"error,omitempty"`
+	Key          string   `json:"key"`
+	RedisType    string   `json:"type"`
+	TTL          *int64   `json:"ttl"`
+	SizeBytes    *int64   `json:"size_bytes,omitempty"`
+	Elements     *int64   `json:"elements,omitempty"`
+	Body         string   `json:"body"`
+	Hex          string   `json:"hex,omitempty"`
+	IsBinary     bool     `json:"is_binary"`
+	Encoding     Encoding `json:"encoding,omitempty"`
+	StreamOffset *int     `json:"stream_offset,omitempty"`
+	Error        string   `json:"error,omitempty"`
 }
 
 // TTLWithExpiry formats a TTL for display: remaining time plus absolute expiry.

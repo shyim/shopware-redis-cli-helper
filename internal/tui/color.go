@@ -45,8 +45,6 @@ var (
 
 	// Selection — bold blue on a dark blue background bar
 	selected = lipgloss.NewStyle().Foreground(colSelFg).Background(colSelBg).Bold(true)
-	// selectedName is the same but used for name fields to match widths
-	selectedName = lipgloss.NewStyle().Foreground(colSelFg).Background(colSelBg).Bold(true)
 
 	// Tag badge
 	tagBadge = lipgloss.NewStyle().
@@ -145,7 +143,7 @@ func box(title string, active bool, w, h int, content string) string {
 	}
 	initialDash := borderStyle.Render(sideH)
 	restDashes := borderStyle.Render(strings.Repeat(sideH, topDashesCount))
-	
+
 	topBorder := cornerTL + initialDash + titleStr + restDashes + cornerTR
 	// Pad top border to full width if title was wider than available
 	topW := lipgloss.Width(topBorder)
@@ -181,13 +179,6 @@ func padRight(s string, n int) string {
 	return s + strings.Repeat(" ", n-w)
 }
 
-func padLeft(s string, n int) string {
-	w := lipgloss.Width(s)
-	if w >= n {
-		return s
-	}
-	return strings.Repeat(" ", n-w) + s
-}
 
 func trunc(s string, max int) string {
 	if lipgloss.Width(s) <= max {
@@ -212,26 +203,6 @@ func trunc(s string, max int) string {
 	return result
 }
 
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func repeatStr(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	return strings.Repeat(s, n)
-}
 
 // ==========================================================================
 // Shared formatting

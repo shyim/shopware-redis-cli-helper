@@ -82,7 +82,7 @@ func (m Model) renderPicker() string {
 
 	// Join cards horizontally
 	cards := lipgloss.JoinHorizontal(lipgloss.Top, basicCard, "  ", advCard)
-	
+
 	help := textMuted.Render("  ←/→/tab to choose  ·  enter to confirm  ·  q to quit")
 
 	pickerContent := lipgloss.JoinVertical(lipgloss.Center,
@@ -164,12 +164,12 @@ func (m Model) renderStatusLine() string {
 
 	leftSide := style.Render(status)
 	rightSide := modeBadge
-	
+
 	paddingCount := m.width - 2 - lipgloss.Width(leftSide) - lipgloss.Width(rightSide)
 	if paddingCount < 0 {
 		paddingCount = 0
 	}
-	
+
 	return leftSide + strings.Repeat(" ", paddingCount) + rightSide
 }
 
@@ -208,23 +208,23 @@ func (m Model) renderServerInfo() string {
 			style = successBold
 		}
 		parts = append(parts,
-			textMuted.Render("mem: ") + style.Render(fmt.Sprintf("%5.1f%%", *pct*100)) + " " + textDim.Render("("+humanize.Bytes(uint64(m.info.UsedMemory))+"/"+humanize.Bytes(uint64(m.info.Maxmemory))+")"),
+			textMuted.Render("mem: ")+style.Render(fmt.Sprintf("%5.1f%%", *pct*100))+" "+textDim.Render("("+humanize.Bytes(uint64(m.info.UsedMemory))+"/"+humanize.Bytes(uint64(m.info.Maxmemory))+")"),
 		)
 	} else if m.info.UsedMemory > 0 {
-		parts = append(parts, textMuted.Render("mem: ") + accent.Render(humanize.Bytes(uint64(m.info.UsedMemory))))
+		parts = append(parts, textMuted.Render("mem: ")+accent.Render(humanize.Bytes(uint64(m.info.UsedMemory))))
 	}
 
 	if m.info.DBKeys > 0 {
-		parts = append(parts, textMuted.Render("keys: ") + primary.Render(humanize.Comma(m.info.DBKeys)))
+		parts = append(parts, textMuted.Render("keys: ")+primary.Render(humanize.Comma(m.info.DBKeys)))
 	}
 	if m.info.EvictedKeys > 0 {
-		parts = append(parts, textMuted.Render("evicted: ") + warning.Render(fmt.Sprintf("%d", m.info.EvictedKeys)))
+		parts = append(parts, textMuted.Render("evicted: ")+warning.Render(fmt.Sprintf("%d", m.info.EvictedKeys)))
 	}
 	if m.info.MemFragmentationRatio >= 1.5 {
-		parts = append(parts, textMuted.Render("frag: ") + warning.Render(fmt.Sprintf("%.2f", m.info.MemFragmentationRatio)))
+		parts = append(parts, textMuted.Render("frag: ")+warning.Render(fmt.Sprintf("%.2f", m.info.MemFragmentationRatio)))
 	}
 	if m.info.RedisVersion != "" {
-		parts = append(parts, textMuted.Render("ver: ") + textNormal.Render(m.info.RedisVersion))
+		parts = append(parts, textMuted.Render("ver: ")+textNormal.Render(m.info.RedisVersion))
 	}
 
 	return textDim.Render(" ") + strings.Join(parts, textDim.Render(" · "))
@@ -616,10 +616,10 @@ func (m Model) renderFooter() string {
 			Padding(0, 1).
 			Background(compat.AdaptiveColor{Light: lipgloss.Color("#E5E7EB"), Dark: lipgloss.Color("#1F2937")}).
 			Render(
-				primaryBold.Render(" 🔍 Filter: ") + 
-				textNormal.Bold(true).Render(m.filter) + 
-				primary.Render("█") + 
-				textMuted.Padding(0, 2).Render("(enter/esc to apply)"),
+				primaryBold.Render(" 🔍 Filter: ") +
+					textNormal.Bold(true).Render(m.filter) +
+					primary.Render("█") +
+					textMuted.Padding(0, 2).Render("(enter/esc to apply)"),
 			)
 	}
 
@@ -650,7 +650,7 @@ func (m Model) renderFooter() string {
 	}
 
 	shortcutsBar := lipgloss.JoinHorizontal(lipgloss.Top, shortcuts...)
-	
+
 	footerBar := lipgloss.NewStyle().
 		Background(compat.AdaptiveColor{Light: lipgloss.Color("#E5E7EB"), Dark: lipgloss.Color("#1F2937")}).
 		Width(m.width).
@@ -672,7 +672,7 @@ func (m Model) renderKeyList() string {
 	}
 
 	header := m.renderDrillHeader("Keys")
-	
+
 	var shortcuts []string
 	shortcuts = append(shortcuts, renderShortcut("q", "Quit"))
 	shortcuts = append(shortcuts, renderShortcut("enter", "View Value"))
@@ -743,7 +743,7 @@ func (m Model) renderValue() string {
 	}
 
 	header := m.renderDrillHeader("Value")
-	
+
 	var shortcuts []string
 	shortcuts = append(shortcuts, renderShortcut("q", "Quit"))
 	shortcuts = append(shortcuts, renderShortcut("x", "Toggle Hex/Text"))
@@ -848,20 +848,20 @@ func (m Model) renderDrillHeader(what string) string {
 	title := primaryBold.Render(" SHOPWARE REDIS INSIGHTS ")
 	arrow := textMuted.Render(" ❯ ")
 	section := textNormal.Bold(true).Render(strings.ToUpper(what))
-	
+
 	rightSide := ""
 	if m.info != nil && m.info.RedisVersion != "" {
 		rightSide = textMuted.Render("v" + m.info.RedisVersion + " ")
 	}
-	
+
 	leftSide := title + arrow + section
 	paddingCount := m.width - lipgloss.Width(leftSide) - lipgloss.Width(rightSide)
 	if paddingCount < 0 {
 		paddingCount = 0
 	}
-	
+
 	headerBar := leftSide + strings.Repeat(" ", paddingCount) + rightSide
-	
+
 	return lipgloss.NewStyle().
 		Background(compat.AdaptiveColor{Light: lipgloss.Color("#E5E7EB"), Dark: lipgloss.Color("#1F2937")}).
 		Padding(0, 1).

@@ -78,7 +78,7 @@ func runCleanup(cmd *cobra.Command, args []string) error {
 	}
 
 	client := MustConnect()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 
@@ -249,7 +249,7 @@ func processBatch(ctx context.Context, client *redis.Client, keys []string, dryR
 
 	res, err := client.Eval(ctx, luaCleanup, keys, dryRunArg).Result()
 	if err != nil {
-		return t, fmt.Errorf("Lua script failed: %w", err)
+		return t, fmt.Errorf("lua script failed: %w", err)
 	}
 
 	slice, ok := res.([]interface{})

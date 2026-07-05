@@ -336,7 +336,7 @@ func (m *Model) startScan(advanced bool) tea.Cmd {
 		}
 
 		go func() {
-			defer client.Close()
+			defer func() { _ = client.Close() }()
 
 			_, err := internal.Scan(m.ctx, client, m.pattern, opts, func(s *internal.Stats) {
 				clone := cloneStats(s)

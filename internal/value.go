@@ -38,11 +38,11 @@ func (e Encoding) Label() string {
 
 // Decoded is a decoded payload ready for display.
 type Decoded struct {
-	Encoding      Encoding
-	StreamOffset  *int // nil for plain, 0 for leading stream, >0 for embedded
-	Text          string
-	Hex           string
-	IsBinary      bool
+	Encoding     Encoding
+	StreamOffset *int // nil for plain, 0 for leading stream, >0 for embedded
+	Text         string
+	Hex          string
+	IsBinary     bool
 }
 
 // sniff detects compression from leading magic bytes.
@@ -63,7 +63,7 @@ func inflateGzip(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	return io.ReadAll(r)
 }
 
@@ -72,7 +72,7 @@ func inflateZlib(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	return io.ReadAll(r)
 }
 
@@ -210,10 +210,10 @@ func hexDumpFunc(bytes []byte, max int) string {
 			}
 		}
 		hexStr := strings.Join(hexParts, " ")
-		out.WriteString(fmt.Sprintf("%08x  %-48s  %s\n", offset, hexStr, string(asciiParts)))
+		fmt.Fprintf(&out, "%08x  %-48s  %s\n", offset, hexStr, string(asciiParts))
 	}
 	if len(bytes) > shown {
-		out.WriteString(fmt.Sprintf("… %d more bytes (truncated)\n", len(bytes)-shown))
+		fmt.Fprintf(&out, "… %d more bytes (truncated)\n", len(bytes)-shown)
 	}
 	return out.String()
 }

@@ -14,7 +14,7 @@ func gzipData(t *testing.T, data []byte) []byte {
 	if _, err := w.Write(data); err != nil {
 		t.Fatal(err)
 	}
-	w.Close()
+	_ = w.Close()
 	return buf.Bytes()
 }
 
@@ -25,7 +25,7 @@ func zlibData(t *testing.T, data []byte) []byte {
 	if _, err := w.Write(data); err != nil {
 		t.Fatal(err)
 	}
-	w.Close()
+	_ = w.Close()
 	return buf.Bytes()
 }
 

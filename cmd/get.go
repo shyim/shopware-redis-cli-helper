@@ -40,7 +40,7 @@ func init() {
 func runGet(cmd *cobra.Command, args []string) error {
 	key := args[0]
 	client := MustConnect()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 	v := internal.GetValue(ctx, client, key, internal.ValueDisplayCap)
@@ -91,27 +91,27 @@ func headerLine(v *internal.KeyValue) string {
 
 func printGetJSON(v *internal.KeyValue) error {
 	type out struct {
-		Key             string  `json:"key"`
-		Type            string  `json:"type"`
-		TTL             *int64  `json:"ttl"`
-		ExpiresAt       *string `json:"expires_at,omitempty"`
-		SizeBytes       *int64  `json:"size_bytes,omitempty"`
-		Elements        *int64  `json:"elements,omitempty"`
-		Encoding        string  `json:"encoding,omitempty"`
-		EmbeddedOffset  *int    `json:"embedded_offset,omitempty"`
-		IsBinary        bool    `json:"is_binary"`
-		Value           string  `json:"value"`
+		Key            string  `json:"key"`
+		Type           string  `json:"type"`
+		TTL            *int64  `json:"ttl"`
+		ExpiresAt      *string `json:"expires_at,omitempty"`
+		SizeBytes      *int64  `json:"size_bytes,omitempty"`
+		Elements       *int64  `json:"elements,omitempty"`
+		Encoding       string  `json:"encoding,omitempty"`
+		EmbeddedOffset *int    `json:"embedded_offset,omitempty"`
+		IsBinary       bool    `json:"is_binary"`
+		Value          string  `json:"value"`
 	}
 
 	o := out{
-		Key:      v.Key,
-		Type:     v.RedisType,
-		TTL:      v.TTL,
+		Key:       v.Key,
+		Type:      v.RedisType,
+		TTL:       v.TTL,
 		SizeBytes: v.SizeBytes,
-		Elements: v.Elements,
-		Encoding: v.Encoding.Label(),
-		IsBinary: v.IsBinary,
-		Value:    v.Body,
+		Elements:  v.Elements,
+		Encoding:  v.Encoding.Label(),
+		IsBinary:  v.IsBinary,
+		Value:     v.Body,
 	}
 
 	if v.StreamOffset != nil && *v.StreamOffset > 0 {

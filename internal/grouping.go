@@ -122,7 +122,7 @@ func DisplayKey(key string) string {
 	if idx >= 0 {
 		before := key[:idx]
 		tag := key[idx+len(escapedTagMarker):]
-		
+
 		if tag == "" {
 			colonIdx := strings.Index(before, ":")
 			if colonIdx >= 0 {
@@ -131,7 +131,7 @@ func DisplayKey(key string) string {
 			}
 			return "🏷 tags » " + before
 		}
-		
+
 		return before + "🏷 tags » " + tag
 	}
 	if unescaped, err := url.QueryUnescape(key); err == nil && unescaped != key {

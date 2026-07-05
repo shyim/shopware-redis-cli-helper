@@ -3,7 +3,6 @@ package internal
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -94,10 +93,7 @@ func enrich(ctx context.Context, client *redis.Client, keys []string, opts ScanO
 		}
 	}
 
-	_, err := pipe.Exec(ctx)
-	if err != nil && !strings.Contains(err.Error(), "no such key") {
-		// Pipeline can fail on individual commands; we process results per-key.
-	}
+	_, _ = pipe.Exec(ctx)
 
 	for i := range observations {
 		obs := KeyObservation{}
