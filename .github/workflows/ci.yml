@@ -36,16 +36,8 @@ jobs:
           go-version: '1.26'
           cache: true
 
-      - name: Check formatting
-        run: |
-          if [ -n "$(gofmt -l .)" ]; then
-            echo "Go files are not formatted. Run gofmt -w ."
-            gofmt -d .
-            exit 1
-          fi
-
-      - name: Vet
-        run: go vet ./...
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
 
       - name: Run tests
         run: go test -v ./...
