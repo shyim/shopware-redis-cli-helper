@@ -3,24 +3,19 @@ version: 2
 project_name: shopware-redis-cli-helper
 
 builds:
-  - id: shopware-redis-cli-helper
-    builder: rust
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    main: ./main.go
     binary: shopware-redis-cli-helper
-    tool: cargo
-    command: zigbuild
-    flags:
-      - --release
-      - --locked
-    targets:
-      - x86_64-apple-darwin
-      - aarch64-apple-darwin
-      - x86_64-unknown-linux-gnu
-      - aarch64-unknown-linux-gnu
 
 archives:
   - id: shopware-redis-cli-helper
-    ids:
-      - shopware-redis-cli-helper
     formats:
       - tar.gz
     name_template: >-

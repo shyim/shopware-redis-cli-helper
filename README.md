@@ -7,7 +7,7 @@ all over non-blocking `SCAN`, safe to run against production.
 
 [![CI](https://github.com/shyim/shopware-redis-cli-helper/actions/workflows/ci.yml/badge.svg)](https://github.com/shyim/shopware-redis-cli-helper/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/shyim/shopware-redis-cli-helper)](https://github.com/shyim/shopware-redis-cli-helper/releases/latest)
-[![Built with Rust](https://img.shields.io/badge/built_with-Rust-orange)](https://www.rust-lang.org)
+[![Built with Go](https://img.shields.io/badge/built_with-Go-blue)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](#license)
 
 ## Highlights
@@ -78,13 +78,13 @@ Each release also ships a `checksums.txt` for verification.
 
 ### From source
 
-Requires a Rust toolchain (edition 2021, stable).
+Requires Go toolchain (Go 1.26 or newer).
 
 ```bash
-cargo install --git https://github.com/shyim/shopware-redis-cli-helper
+go install github.com/shyim/shopware-redis-cli-helper@latest
 
 # or, from a checkout:
-cargo build --release   # binary at ./target/release/shopware-redis-cli-helper
+go build -o shopware-redis-cli-helper main.go
 ```
 
 ## Quick start
@@ -370,8 +370,8 @@ into a single `product-detail-route` bucket.
 ## Development
 
 ```bash
-cargo test            # unit + integration tests
-cargo build --release
+go test ./...         # unit + integration tests
+go build -o shopware-redis-cli-helper main.go
 ```
 
 The `cleanup`, `inspect`, and value-decoding suites include integration tests
@@ -380,20 +380,21 @@ They are skipped automatically when no Redis is reachable.
 
 Source layout:
 
-| File              | Responsibility                                              |
-|-------------------|-------------------------------------------------------------|
-| `src/main.rs`     | Global args, subcommand dispatch, connection handling       |
-| `src/insights.rs` | `insights` command: `tui` / `report` subcommands            |
-| `src/get.rs`      | `get` command: single-key value output                      |
-| `src/cleanup.rs`  | `cleanup` command: ported Lua + concurrent runner           |
-| `src/scanner.rs`  | Non-blocking `SCAN` loop and pipelined enrichment           |
-| `src/stats.rs`    | Aggregation and the bounded biggest-keys heap               |
-| `src/grouping.rs` | Namespace / type parsing and hash-stripping                 |
-| `src/report.rs`   | Terminal-table and Markdown rendering                       |
-| `src/tui.rs`      | Interactive ratatui UI: scan, navigation, drill-down        |
-| `src/inspect.rs`  | Async fetcher: list a type's keys, read a value             |
-| `src/serverinfo.rs` | Background `INFO`/`DBSIZE` poller for the header health strip |
-| `src/value.rs`    | Compression detection and decoding for display              |
+| File / Folder | Responsibility |
+|---|---|
+| `main.go` | Global args, subcommand dispatch, connection handling |
+| `cmd/root.go` | Cobra CLI configuration & global flags |
+| `cmd/insights.go` | `insights` command: `tui` / `report` subcommands |
+| `cmd/get.go` | `get` command: single-key value output |
+| `cmd/cleanup.go` | `cleanup` command: Lua script + concurrent runner |
+| `internal/scanner.go` | Non-blocking `SCAN` loop and pipelined enrichment |
+| `internal/stats.go` | Aggregation and the bounded biggest-keys heap |
+| `internal/grouping.go` | Namespace / type parsing and hash-stripping |
+| `internal/report.go` | Terminal-table and Markdown rendering |
+| `internal/tui/` | Interactive bubbletea TUI (model, update, view) |
+| `internal/inspect.go` | Async fetcher: list a type's keys, read a value |
+| `internal/serverinfo.go` | Background `INFO`/`DBSIZE` poller for TUI header |
+| `internal/value.go` | Compression detection and decoding for display |
 
 ## License
 

@@ -30,19 +30,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          components: rustfmt, clippy
-
-      - name: Cache cargo registry and build
-        uses: Swatinem/rust-cache@v2
+          go-version: '1.26'
+          cache: true
 
       - name: Check formatting
-        run: cargo fmt --all --check
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "Go files are not formatted. Run gofmt -w ."
+            gofmt -d .
+            exit 1
+          fi
 
-      - name: Clippy
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Vet
+        run: go vet ./...
 
       - name: Run tests
-        run: cargo test --locked --all-targets --all-features
+        run: go test -v ./...
